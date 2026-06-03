@@ -1,28 +1,245 @@
 import React,{useMemo,useState}from"react";
-const MACHINE_NAME="Bagger EZ80",SHEET_WEBAPP_URL=import.meta.env.VITE_GOOGLE_SCRIPT_URL||"",GREASE_INTERVAL=8,GREASE_REQUIRED_FROM=6;
-const members=["Steininger","Zorn","Stockhammer","Kerschbaumer","Mayr","Passenbrunner","Zwicklhuber","Kremshuber","Staudinger","WARTUNG"];
-function parseDecimal(v){if(v===null||v===undefined)return NaN;const c=String(v).trim().replace(/\s/g,"").replace(",",".");return c===""?NaN:Number(c)}
-function formatHours(v){if(v===""||v===null||v===undefined||Number.isNaN(v))return"—";return Number(v).toLocaleString("de-AT",{minimumFractionDigits:1,maximumFractionDigits:2})+" h"}
+
+const MACHINE_NAME="TB290";
+const SHEET_WEBAPP_URL=import.meta.env.VITE_GOOGLE_SCRIPT_URL||"";
+const RATES={innerbetrieblich:0,ueberbetrieblich:60};
+
+function parseDecimal(value){
+  if(value===null||value===undefined)return NaN;
+  const cleaned=String(value).trim().replace(/\s/g,"").replace(",",".");
+  if(cleaned==="")return NaN;
+  return Number(cleaned);
+}
+
+function formatHours(value){
+  if(value===""||Number.isNaN(value)||value===null||value===undefined)return"—";
+  return Number(value).toLocaleString("de-AT",{minimumFractionDigits:1,maximumFractionDigits:2})+" h";
+}
+
+function formatEuro(value){
+  if(value===""||Number.isNaN(value)||value===null||value===undefined)return"—";
+  return "€ "+Number(value).toLocaleString("de-AT",{minimumFractionDigits:2,maximumFractionDigits:2});
+}
+
 function Field({label,children}){return <label className="field"><span>{label}</span>{children}</label>}
-export default function App(){const today=new Date().toISOString().slice(0,10);
-const[form,setForm]=useState({datumVon:today,datumBis:today,mitglied:"",stundenStart:"",stundenEnde:"",diesel:"",einsatzart:"innerbetrieblich",bemerkung:"",getankt:false,abgeschmiert:false});
-const[message,setMessage]=useState(""),[sending,setSending]=useState(false),[loadingLast,setLoadingLast]=useState(false);
-const[wartung,setWartung]=useState({checked:false,lastGreasedEnde:null,hoursSinceGreased:null,due:false});
-const startNumber=parseDecimal(form.stundenStart),endNumber=parseDecimal(form.stundenEnde),dieselNumber=parseDecimal(form.diesel);
-const gefahreneStunden=useMemo(()=>{const s=parseDecimal(form.stundenStart),e=parseDecimal(form.stundenEnde);if(Number.isNaN(s)||Number.isNaN(e))return"";return Math.round((e-s)*100)/100},[form.stundenStart,form.stundenEnde]);
-const hasValidHours=gefahreneStunden!==""&&gefahreneStunden>=0;
-const hoursAtEndSinceGreased=useMemo(()=>wartung.lastGreasedEnde===null||Number.isNaN(endNumber)?null:Math.round((endNumber-Number(wartung.lastGreasedEnde))*100)/100,[wartung.lastGreasedEnde,endNumber]);
-const hoursRemainingNow=wartung.hoursSinceGreased===null?null:Math.max(0,Math.round((GREASE_INTERVAL-Number(wartung.hoursSinceGreased))*100)/100);
-const hoursRemainingAfterEntry=hoursAtEndSinceGreased===null?null:Math.max(0,Math.round((GREASE_INTERVAL-hoursAtEndSinceGreased)*100)/100);
-const greaseRequiredAfterEntry=hoursAtEndSinceGreased!==null&&hoursAtEndSinceGreased>=GREASE_REQUIRED_FROM&&!form.abgeschmiert;
-const greaseDueAfterEntry=hoursAtEndSinceGreased!==null&&hoursAtEndSinceGreased>=GREASE_INTERVAL&&!form.abgeschmiert;
-const canSave=form.datumVon&&form.datumBis&&form.mitglied&&!Number.isNaN(startNumber)&&!Number.isNaN(endNumber)&&hasValidHours&&form.getankt&&!greaseRequiredAfterEntry&&!sending;
-async function takeLastValue(){setMessage("");if(!SHEET_WEBAPP_URL){setMessage("Google-Script-Link fehlt noch.");return}setLoadingLast(true);try{const r=await fetch(`${SHEET_WEBAPP_URL}?action=last&ts=${Date.now()}`);const d=await r.json();if(!d.ok||d.lastEnde===""||d.lastEnde==null){setMessage("Es wurde noch kein letzter Stundenzähler gefunden.");return}const last=String(d.lastEnde).replace(".",",");setForm(c=>({...c,stundenStart:last}));const lastGreasedEnde=d.lastGreasedEnde===""||d.lastGreasedEnde==null?null:Number(d.lastGreasedEnde);const hoursSinceGreased=d.hoursSinceGreased===""||d.hoursSinceGreased==null?null:Number(d.hoursSinceGreased);const due=Boolean(d.greaseDue);setWartung({checked:true,lastGreasedEnde,hoursSinceGreased,due});if(lastGreasedEnde===null)setMessage(`Letzter Stundenzähler übernommen: ${last}. Keine letzte Abschmierung gefunden.`);else if(due)setMessage(`Letzter Stundenzähler übernommen: ${last}. Abschmieren ist fällig.`);else setMessage(`Letzter Stundenzähler übernommen: ${last}.`) }catch{setMessage("Letzter Wert konnte nicht geladen werden. Bitte Google-Script neu bereitstellen.")}finally{setLoadingLast(false)}}
-async function saveEntry(e){e.preventDefault();setMessage("");if(!SHEET_WEBAPP_URL){setMessage("Google-Script-Link fehlt noch.");return}if(!canSave){alert("Bitte alle Pflichtfelder richtig ausfüllen. Ab 6 Stunden seit letzter Abschmierung muss 'Abgeschmiert' angehakt werden.");return}setSending(true);const payload={maschine:MACHINE_NAME,datumVon:form.datumVon,datumBis:form.datumBis,mitglied:form.mitglied,stundenStart:startNumber,stundenEnde:endNumber,betriebsstunden:Number(gefahreneStunden),diesel:Number.isNaN(dieselNumber)?0:dieselNumber,einsatzart:form.einsatzart,getankt:form.getankt,abgeschmiert:form.abgeschmiert,abschmierungFaelligBeimSpeichern:greaseDueAfterEntry,abschmierungErforderlichBeimSpeichern:greaseRequiredAfterEntry,stundenSeitLetzterAbschmierung:hoursAtEndSinceGreased,bemerkung:form.bemerkung.trim(),erfasstAm:new Date().toISOString()};try{await fetch(SHEET_WEBAPP_URL,{method:"POST",mode:"no-cors",headers:{"Content-Type":"text/plain;charset=utf-8"},body:JSON.stringify(payload)});setMessage(form.abgeschmiert?"Eintrag gespeichert. Abschmier-Zyklus wurde neu gestartet.":"Eintrag wurde gespeichert.");setForm({datumVon:today,datumBis:today,mitglied:"",stundenStart:"",stundenEnde:"",diesel:"",einsatzart:"innerbetrieblich",bemerkung:"",getankt:false,abgeschmiert:false});setWartung({checked:false,lastGreasedEnde:null,hoursSinceGreased:null,due:false})}catch{setMessage("Speichern fehlgeschlagen. Bitte Internetverbindung prüfen.")}finally{setSending(false)}}
-return <div className="page"><main className="app-card"><header className="top"><div className="logo"><img src="/logo.png" alt="Takeuchi TB290" /></div><div className="header-text"><h1>{MACHINE_NAME}</h1><p>Stundenerfassung</p></div></header>{message&&<div className="message">{message}</div>}<form onSubmit={saveEntry} className="form">
-<section className="section"><h2>Zeitraum</h2><div className="grid two"><Field label="Von"><input type="date" value={form.datumVon} onChange={e=>setForm({...form,datumVon:e.target.value})}/></Field><Field label="Bis"><input type="date" value={form.datumBis} onChange={e=>setForm({...form,datumBis:e.target.value})}/></Field></div></section>
-<section className="section"><h2>Einsatz</h2><Field label="Mitglied / Fahrer"><select value={form.mitglied} onChange={e=>setForm({...form,mitglied:e.target.value})}><option value="">Bitte Mitglied auswählen</option>{members.map(m=><option key={m} value={m}>{m}</option>)}</select></Field><Field label="Einsatzart"><select value={form.einsatzart} onChange={e=>setForm({...form,einsatzart:e.target.value})}><option value="innerbetrieblich">Innerbetrieblich — € 15/h</option><option value="ueberbetrieblich">Überbetrieblich — € 50/h</option></select></Field></section>
-<section className="section"><h2>Betriebsstunden</h2><button type="button" className="secondary" onClick={takeLastValue} disabled={loadingLast}>{loadingLast?"Lade letzten Wert...":"Letzten Wert übernehmen"}</button><div className="grid two"><Field label="Stundenzähler Beginn"><input type="text" inputMode="decimal" placeholder="z. B. 1250,5" value={form.stundenStart} onChange={e=>setForm({...form,stundenStart:e.target.value})}/></Field><Field label="Stundenzähler Ende"><input type="text" inputMode="decimal" placeholder="z. B. 1253,0" value={form.stundenEnde} onChange={e=>setForm({...form,stundenEnde:e.target.value})}/></Field></div><div className={!hasValidHours&&form.stundenStart&&form.stundenEnde?"result error":"result"}><span>Gefahrene Stunden</span><strong>{formatHours(gefahreneStunden)}</strong></div></section>
-<section className="section"><h2>Abschmier-Hinweis</h2>{!wartung.checked&&<div className="big-maintenance neutral"><span>Letzten Wert laden</span><strong>Dann wird der Abschmier-Zyklus geprüft</strong></div>}{wartung.checked&&wartung.lastGreasedEnde===null&&<div className="big-maintenance warning"><span>Keine letzte Abschmierung gefunden</span><strong>Bitte abschmieren und Häkchen setzen</strong></div>}{wartung.checked&&wartung.lastGreasedEnde!==null&&!wartung.due&&<div className={(hoursRemainingNow!==null&&hoursRemainingNow<=2)?"big-maintenance warning":"big-maintenance ok"}><span>Abschmieren in</span><strong>{formatHours(hoursRemainingNow)}</strong></div>}{wartung.checked&&wartung.due&&<div className="big-maintenance danger"><span>Abschmieren</span><strong>JETZT FÄLLIG</strong></div>}{hoursAtEndSinceGreased!==null&&form.stundenEnde&&<div className={greaseRequiredAfterEntry?"maintenance danger":"maintenance ok"}>{form.abgeschmiert?`Abgeschmiert angehakt: Zyklus startet nach dem Speichern neu.`:greaseRequiredAfterEntry?`Speichern erst möglich, wenn „Abgeschmiert“ angehakt ist. Nach diesem Einsatz: ${formatHours(hoursAtEndSinceGreased)} seit letzter Abschmierung.`:`Nach diesem Einsatz bleiben noch ${formatHours(hoursRemainingAfterEntry)} bis zum Abschmieren.`}</div>}</section>
-<section className="section"><h2>Kontrolle</h2><Field label="Getankte Dieselmenge in Liter"><input type="text" inputMode="decimal" placeholder="z. B. 18,5" value={form.diesel} onChange={e=>setForm({...form,diesel:e.target.value})}/></Field><label className="check"><input type="checkbox" checked={form.getankt} onChange={e=>setForm({...form,getankt:e.target.checked})}/><span>Getankt</span></label><label className="check"><input type="checkbox" checked={form.abgeschmiert} onChange={e=>setForm({...form,abgeschmiert:e.target.checked})}/><span>Abgeschmiert — startet 8h-Zyklus neu</span></label></section>
-<section className="section"><Field label="Bemerkung / Schäden"><textarea placeholder="z. B. Schaden, Wartung, Besonderheiten" value={form.bemerkung} onChange={e=>setForm({...form,bemerkung:e.target.value})}/></Field></section><button className="primary" type="submit" disabled={!canSave}>{sending?"Speichert...":"Eintrag speichern"}</button></form><footer>© by Steininger Flo</footer></main></div>}
+
+export default function App(){
+  const today=new Date().toISOString().slice(0,10);
+
+  const[form,setForm]=useState({
+    datumVon:today,
+    datumBis:today,
+    fahrer:"",
+    stundenStart:"",
+    stundenEnde:"",
+    diesel:"",
+    einsatzart:"innerbetrieblich",
+    bemerkung:""
+  });
+
+  const[message,setMessage]=useState("");
+  const[sending,setSending]=useState(false);
+  const[loadingLast,setLoadingLast]=useState(false);
+
+  const startNumber=parseDecimal(form.stundenStart);
+  const endNumber=parseDecimal(form.stundenEnde);
+  const dieselNumber=parseDecimal(form.diesel);
+
+  const gefahreneStunden=useMemo(()=>{
+    const start=parseDecimal(form.stundenStart);
+    const ende=parseDecimal(form.stundenEnde);
+    if(Number.isNaN(start)||Number.isNaN(ende))return"";
+    return Math.round((ende-start)*100)/100;
+  },[form.stundenStart,form.stundenEnde]);
+
+  const hasValidHours=gefahreneStunden!==""&&gefahreneStunden>=0;
+  const stundensatz=RATES[form.einsatzart]??0;
+  const betrag=hasValidHours?Math.round(Number(gefahreneStunden)*stundensatz*100)/100:"";
+
+  const canSave=
+    form.datumVon&&
+    form.datumBis&&
+    form.fahrer.trim()&&
+    !Number.isNaN(startNumber)&&
+    !Number.isNaN(endNumber)&&
+    hasValidHours&&
+    !sending;
+
+  async function takeLastValue(){
+    setMessage("");
+
+    if(!SHEET_WEBAPP_URL){
+      setMessage("Google-Script-Link fehlt noch. Bitte VITE_GOOGLE_SCRIPT_URL in Vercel eintragen.");
+      return;
+    }
+
+    setLoadingLast(true);
+
+    try{
+      const response=await fetch(`${SHEET_WEBAPP_URL}?action=last&ts=${Date.now()}`);
+      const data=await response.json();
+
+      if(!data.ok||data.lastEnde===""||data.lastEnde===null||data.lastEnde===undefined){
+        setMessage("Es wurde noch kein letzter Stundenzähler gefunden.");
+        return;
+      }
+
+      const last=String(data.lastEnde).replace(".",",");
+
+      setForm(current=>({
+        ...current,
+        stundenStart:last
+      }));
+
+      setMessage(`Letzter Stundenzähler übernommen: ${last}`);
+    }catch{
+      setMessage("Letzter Wert konnte nicht geladen werden. Bitte Google-Script-Bereitstellung prüfen.");
+    }finally{
+      setLoadingLast(false);
+    }
+  }
+
+  async function saveEntry(event){
+    event.preventDefault();
+    setMessage("");
+
+    if(!SHEET_WEBAPP_URL){
+      setMessage("Google-Script-Link fehlt noch. Bitte VITE_GOOGLE_SCRIPT_URL in Vercel eintragen.");
+      return;
+    }
+
+    if(!canSave){
+      alert("Bitte alle Pflichtfelder richtig ausfüllen.");
+      return;
+    }
+
+    setSending(true);
+
+    const payload={
+      maschine:MACHINE_NAME,
+      datumVon:form.datumVon,
+      datumBis:form.datumBis,
+      fahrer:form.fahrer.trim(),
+      stundenStart:startNumber,
+      stundenEnde:endNumber,
+      betriebsstunden:Number(gefahreneStunden),
+      diesel:Number.isNaN(dieselNumber)?0:dieselNumber,
+      einsatzart:form.einsatzart,
+      stundensatz:stundensatz,
+      betrag:Number(betrag),
+      bemerkung:form.bemerkung.trim(),
+      erfasstAm:new Date().toISOString()
+    };
+
+    try{
+      await fetch(SHEET_WEBAPP_URL,{
+        method:"POST",
+        mode:"no-cors",
+        headers:{"Content-Type":"text/plain;charset=utf-8"},
+        body:JSON.stringify(payload)
+      });
+
+      setMessage("Eintrag wurde gespeichert.");
+
+      setForm({
+        datumVon:today,
+        datumBis:today,
+        fahrer:"",
+        stundenStart:"",
+        stundenEnde:"",
+        diesel:"",
+        einsatzart:"innerbetrieblich",
+        bemerkung:""
+      });
+    }catch{
+      setMessage("Speichern fehlgeschlagen. Bitte Internetverbindung prüfen.");
+    }finally{
+      setSending(false);
+    }
+  }
+
+  return <div className="page"><main className="app-card">
+    <header className="top">
+      <div className="logo"><img src="/logo.png" alt="Takeuchi TB290" /></div>
+      <div className="header-text">
+        <h1>{MACHINE_NAME}</h1>
+        <p>Stundenerfassung</p>
+      </div>
+    </header>
+
+    {message&&<div className="message">{message}</div>}
+
+    <form onSubmit={saveEntry} className="form">
+      <section className="section">
+        <h2>Zeitraum</h2>
+        <div className="grid two">
+          <Field label="Von">
+            <input type="date" value={form.datumVon} onChange={e=>setForm({...form,datumVon:e.target.value})}/>
+          </Field>
+          <Field label="Bis">
+            <input type="date" value={form.datumBis} onChange={e=>setForm({...form,datumBis:e.target.value})}/>
+          </Field>
+        </div>
+      </section>
+
+      <section className="section">
+        <h2>Einsatz</h2>
+        <Field label="Fahrer">
+          <input type="text" placeholder="Fahrer eintippen" value={form.fahrer} onChange={e=>setForm({...form,fahrer:e.target.value})}/>
+        </Field>
+
+        <Field label="Einsatzart">
+          <select value={form.einsatzart} onChange={e=>setForm({...form,einsatzart:e.target.value})}>
+            <option value="innerbetrieblich">Innerbetrieblich — € 0/h</option>
+            <option value="ueberbetrieblich">Überbetrieblich — € 60/h</option>
+          </select>
+        </Field>
+      </section>
+
+      <section className="section">
+        <h2>Betriebsstunden</h2>
+        <button type="button" className="secondary" onClick={takeLastValue} disabled={loadingLast}>
+          {loadingLast?"Lade letzten Wert...":"Letzten Wert übernehmen"}
+        </button>
+
+        <div className="grid two">
+          <Field label="Stundenzähler Beginn">
+            <input type="text" inputMode="decimal" placeholder="z. B. 1250,5" value={form.stundenStart} onChange={e=>setForm({...form,stundenStart:e.target.value})}/>
+          </Field>
+          <Field label="Stundenzähler Ende">
+            <input type="text" inputMode="decimal" placeholder="z. B. 1253,0" value={form.stundenEnde} onChange={e=>setForm({...form,stundenEnde:e.target.value})}/>
+          </Field>
+        </div>
+
+        <div className={!hasValidHours&&form.stundenStart&&form.stundenEnde?"result error":"result"}>
+          <span>Gefahrene Stunden</span>
+          <strong>{formatHours(gefahreneStunden)}</strong>
+        </div>
+
+        <div className="price-box">
+          <span>Zu zahlender Betrag</span>
+          <strong>{formatEuro(betrag)}</strong>
+        </div>
+      </section>
+
+      <section className="section">
+        <h2>Diesel & Bemerkung</h2>
+        <Field label="Getankte Dieselmenge in Liter">
+          <input type="text" inputMode="decimal" placeholder="z. B. 18,5" value={form.diesel} onChange={e=>setForm({...form,diesel:e.target.value})}/>
+        </Field>
+      </section>
+
+      <section className="section">
+        <Field label="Bemerkung / Schäden">
+          <textarea placeholder="z. B. Schaden, Wartung, Besonderheiten" value={form.bemerkung} onChange={e=>setForm({...form,bemerkung:e.target.value})}/>
+        </Field>
+      </section>
+
+      <button className="primary" type="submit" disabled={!canSave}>
+        {sending?"Speichert...":"Eintrag speichern"}
+      </button>
+    </form>
+
+    <footer>© by Steininger Flo</footer>
+  </main></div>;
+}
